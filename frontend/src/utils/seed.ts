@@ -2,7 +2,8 @@ import { db } from './db';
 import type { BirdSite } from '../types/bird-site';
 import type { SurveySession } from '../types/session';
 import type { RingRecord } from '../types/ring-record';
-import type { Morphometrics } from '../types/morphometrics';
+import type { Morphometrics, MeasureReview, MeasureKey, SpeciesBaseline } from '../types/morphometrics';
+import { quarterOf } from '../types/morphometrics';
 import { SPECIES_CATALOG } from './stats';
 
 const DAY = 86_400_000;
@@ -125,24 +126,120 @@ export const SEED_MORPHS: Morphometrics[] = [
   morph(14, 'ring-016', 12.6, 3.9, 78.2, 62.4, 22.0, 16.8, 2, '郑海', 2),
 ];
 
+/**
+ * 资料室侧示例复核结论：现场原始数值（SEED_MORPHS）一律照原样保留，
+ * 这里只演示结论、存疑/复测与另存修正值。
+ */
+export const SEED_REVIEWS: MeasureReview[] = [
+  // 已定论：维持原值，现场数值不动
+  { id: 'review-morph-001', morphId: 'morph-001', status: '维持原值', reviewedBy: '资料室·林岚', reviewedAt: isoDaysAgo(20), note: '各项与当季均线吻合' },
+  { id: 'review-morph-002', morphId: 'morph-002', status: '维持原值', reviewedBy: '资料室·林岚', reviewedAt: isoDaysAgo(20) },
+  { id: 'review-morph-003', morphId: 'morph-003', status: '维持原值', reviewedBy: '资料室·林岚', reviewedAt: isoDaysAgo(20) },
+  // 已修正：另存修正值，现场原始数值仍保留在 morph 上
+  {
+    id: 'review-morph-004',
+    morphId: 'morph-004',
+    status: '已修正',
+    corrected: { tarsusLength: 18.6 },
+    note: '跗跖读数疑似多记 1mm，经复测照片核对另存修正值',
+    doubtKeys: ['tarsusLength'],
+    reviewedBy: '资料室·林岚',
+    reviewedAt: isoDaysAgo(19),
+  },
+  { id: 'review-morph-005', morphId: 'morph-005', status: '维持原值', reviewedBy: '资料室·林岚', reviewedAt: isoDaysAgo(19) },
+  { id: 'review-morph-006', morphId: 'morph-006', status: '维持原值', reviewedBy: '资料室·林岚', reviewedAt: isoDaysAgo(13) },
+  // 存疑：等待现场说明
+  {
+    id: 'review-morph-007',
+    morphId: 'morph-007',
+    status: '存疑',
+    doubtKeys: ['weight'],
+    note: '体重 820g 明显高于本季均线，请现场核对秤具/单位',
+    reviewedBy: '资料室·林岚',
+    reviewedAt: isoDaysAgo(13),
+  },
+  // 复测：资料室要求重新测量
+  {
+    id: 'review-morph-008',
+    morphId: 'morph-008',
+    status: '复测',
+    remeasureKeys: ['billLength'],
+    note: '喙长 30.1mm 与同鸟种均线偏离大，请现场复测',
+    reviewedBy: '资料室·林岚',
+    reviewedAt: isoDaysAgo(12),
+  },
+  // 还没定论，等待均线核定后重新比对
+  { id: 'review-morph-009', morphId: 'morph-009', status: '待复核', reviewedBy: '', reviewedAt: '' },
+  { id: 'review-morph-010', morphId: 'morph-010', status: '待复核', reviewedBy: '', reviewedAt: '' },
+  { id: 'review-morph-011', morphId: 'morph-011', status: '待复核', reviewedBy: '', reviewedAt: '' },
+  { id: 'review-morph-012', morphId: 'morph-012', status: '待复核', reviewedBy: '', reviewedAt: '' },
+  { id: 'review-morph-013', morphId: 'morph-013', status: '待复核', reviewedBy: '', reviewedAt: '' },
+  { id: 'review-morph-014', morphId: 'morph-014', status: '待复核', reviewedBy: '', reviewedAt: '' },
+];
+
+function seedBaseline(speciesCn: string, days: number, values: Array<[MeasureKey, number, number, number]>): SpeciesBaseline {
+  const set = {} as SpeciesBaseline['values'];
+  values.forEach(([key, mean, std, count]) => {
+    set[key] = { mean, std, count };
+  });
+  const approvedAt = isoDaysAgo(days);
+  return {
+    id: `baseline-${speciesCn}`,
+    speciesCn,
+    quarter: quarterOf(approvedAt),
+    values: set,
+    approvedBy: '资料室·林岚',
+    approvedAt,
+    note: '按季核定',
+  };
+}
+
+/** 资料室已按季核定的均线（定论记录据此快照，不再随均线重算） */
+export const SEED_BASELINES: SpeciesBaseline[] = [
+  seedBaseline('红喉歌鸲', 20, [
+    ['billLength', 14.0, 0.28, 2],
+    ['billWidth', 4.05, 0.07, 2],
+    ['wingLength', 73.8, 0.99, 2],
+    ['tailLength', 57.6, 0.85, 2],
+    ['tarsusLength', 23.2, 0.28, 2],
+    ['weight', 23.2, 0.57, 2],
+  ]),
+  seedBaseline('黑腹滨鹬', 13, [
+    ['billLength', 31.25, 1.63, 2],
+    ['billWidth', 4.65, 0.21, 2],
+    ['wingLength', 109.2, 4.81, 2],
+    ['tailLength', 48.9, 1.84, 2],
+    ['tarsusLength', 27.1, 0.99, 2],
+    ['weight', 49.8, 7.92, 2],
+  ]),
+];
+
 /** 首次打开（表内无数据）时写入示例数据；已有数据则不动 */
 export async function seedIfEmpty(): Promise<void> {
   const flag = await db.meta.get('seeded');
   if (flag) {
     return;
   }
-  const [ringCount, morphCount, siteCount, sessionCount] = await Promise.all([
+  const [ringCount, morphCount, siteCount, sessionCount, reviewCount, baselineCount] = await Promise.all([
     db.rings.count(),
     db.morphs.count(),
     db.sites.count(),
     db.sessions.count(),
+    db.reviews.count(),
+    db.baselines.count(),
   ]);
 
-  await db.transaction('rw', db.rings, db.morphs, db.sites, db.sessions, db.meta, async () => {
-    if (siteCount === 0) await db.sites.bulkPut(SEED_SITES);
-    if (sessionCount === 0) await db.sessions.bulkPut(SEED_SESSIONS);
-    if (ringCount === 0) await db.rings.bulkPut(SEED_RINGS);
-    if (morphCount === 0) await db.morphs.bulkPut(SEED_MORPHS);
-    await db.meta.put({ key: 'seeded', value: new Date().toISOString() });
-  });
+  await db.transaction(
+    'rw',
+    [db.rings, db.morphs, db.reviews, db.baselines, db.sites, db.sessions, db.meta],
+    async () => {
+      if (siteCount === 0) await db.sites.bulkPut(SEED_SITES);
+      if (sessionCount === 0) await db.sessions.bulkPut(SEED_SESSIONS);
+      if (ringCount === 0) await db.rings.bulkPut(SEED_RINGS);
+      if (morphCount === 0) await db.morphs.bulkPut(SEED_MORPHS);
+      if (reviewCount === 0) await db.reviews.bulkPut(SEED_REVIEWS);
+      if (baselineCount === 0) await db.baselines.bulkPut(SEED_BASELINES);
+      await db.meta.put({ key: 'seeded', value: new Date().toISOString() });
+    },
+  );
 }

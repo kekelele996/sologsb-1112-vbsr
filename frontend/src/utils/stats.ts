@@ -1,5 +1,6 @@
-import type { MeasureDeviation, MeasureKey, Morphometrics } from '../types/morphometrics';
-import { MEASURE_FIELDS } from '../types/morphometrics';
+import type { MeasureBaseline, MeasureBaselineSet, MeasureDeviation, MeasureKey, MeasureValueSet, Morphometrics } from '../types/morphometrics';
+import { MEASURE_FIELDS, quarterOf } from '../types/morphometrics';
+import type { MeasureReview } from '../types/morphometrics';
 import type { RingRecord, RingStatus } from '../types/ring-record';
 import type { SessionStats, SurveySession } from '../types/session';
 
@@ -87,44 +88,137 @@ export function buildSessionStats(session: SurveySession, records: RingRecord[],
   };
 }
 
-/** 同鸟种历史均值（按量度字段） */
-export function measureMeans(records: RingRecord[], morphs: Morphometrics[]): Record<string, Record<MeasureKey, number>> {
+/**
+ * 复核采用的量度数值：资料室已另存修正值的量度项用修正值，其余照原样用现场原始数值。
+ * 现场原始数值始终保留在 morph 上，这里只是计算时取值。
+ */
+export function effectiveValuesOf(morph: Morphometrics, review?: MeasureReview): MeasureValueSet {
+  const values = {} as MeasureValueSet;
+  MEASURE_FIELDS.forEach((field) => {
+    const corrected = review?.corrected?.[field.key];
+    values[field.key] = typeof corrected === 'number' && corrected > 0 ? corrected : Number(morph[field.key]) || 0;
+  });
+  return values;
+}
+
+/** 单个量度项的均线（均值 + 样本标准差 + 样本量） */
+function baselineOf(values: number[]): MeasureBaseline {
+  const valid = values.filter((value) => Number.isFinite(value) && value > 0);
+  const count = valid.length;
+  if (count === 0) return { mean: 0, std: 0, count: 0 };
+  const mean = valid.reduce((sum, v) => sum + v, 0) / count;
+  // 样本标准差（n-1）；只有一个样本时离散度记 0
+  const variance = count > 1 ? valid.reduce((sum, v) => sum + (v - mean) ** 2, 0) / (count - 1) : 0;
+  return { mean: Number(mean.toFixed(2)), std: Number(Math.sqrt(variance).toFixed(2)), count };
+}
+
+/**
+ * 试算全部「鸟种 × 季度」的均线（均值 + 标准差）。
+ * 未经核定前用于页面提示；资料室按季核定后以 SpeciesBaseline 为准。
+ * 取值规则：已定论「已修正」的记录用修正值参与统计，其余用现场原始数值；
+ * 「两边不符」等尚未确认的记录仍按原始数值参与（结论侧尚无定论）。
+ */
+export function provisionalBaselines(
+  records: RingRecord[],
+  morphs: Morphometrics[],
+  reviews: MeasureReview[],
+): Record<string, Record<string, MeasureBaselineSet>>;
+/** 试算指定季度的均线（季度参数缺省返回全部季度）。 */
+export function provisionalBaselines(
+  records: RingRecord[],
+  morphs: Morphometrics[],
+  reviews: MeasureReview[],
+  quarter: string,
+): Record<string, MeasureBaselineSet>;
+export function provisionalBaselines(
+  records: RingRecord[],
+  morphs: Morphometrics[],
+  reviews: MeasureReview[],
+  quarter?: string,
+): Record<string, Record<string, MeasureBaselineSet>> | Record<string, MeasureBaselineSet> {
   const speciesByRing = new Map(records.map((record) => [record.id, record.speciesCn]));
-  const buckets = new Map<string, Morphometrics[]>();
+  const reviewByMorph = new Map(reviews.map((review) => [review.morphId, review]));
+  // 两层分桶：季度 → 鸟种 → 样本
+  const buckets = new Map<string, Map<string, MeasureValueSet[]>>();
+
   morphs.forEach((morph) => {
     const species = speciesByRing.get(morph.ringId);
     if (!species) return;
-    const list = buckets.get(species) ?? [];
-    list.push(morph);
-    buckets.set(species, list);
+    if (quarter && quarterOf(morph.measuredAt) !== quarter) return;
+    const q = quarterOf(morph.measuredAt);
+    const speciesBuckets = buckets.get(q) ?? new Map<string, MeasureValueSet[]>();
+    const list = speciesBuckets.get(species) ?? [];
+    list.push(effectiveValuesOf(morph, reviewByMorph.get(morph.id)));
+    speciesBuckets.set(species, list);
+    buckets.set(q, speciesBuckets);
   });
 
-  const result: Record<string, Record<MeasureKey, number>> = {};
-  buckets.forEach((list, species) => {
-    const means = {} as Record<MeasureKey, number>;
-    MEASURE_FIELDS.forEach((field) => {
-      const values = list.map((morph) => Number(morph[field.key]) || 0).filter((value) => value > 0);
-      means[field.key] = values.length ? Number((values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(2)) : 0;
+  const byQuarter: Record<string, Record<string, MeasureBaselineSet>> = {};
+  buckets.forEach((speciesBuckets, q) => {
+    const result: Record<string, MeasureBaselineSet> = {};
+    speciesBuckets.forEach((list, species) => {
+      const set = {} as MeasureBaselineSet;
+      MEASURE_FIELDS.forEach((field) => {
+        set[field.key] = baselineOf(list.map((values) => values[field.key]));
+      });
+      result[species] = set;
     });
-    result[species] = means;
+    byQuarter[q] = result;
   });
-  return result;
+
+  return quarter ? byQuarter[quarter] ?? {} : byQuarter;
 }
 
-/** 单条量度与同鸟种均值、常见区间的偏离计算 */
+/**
+ * 资料室按季核定时建议的均线：按鸟种 + 季度从现有量度（修正值优先）试算。
+ */
+export function suggestBaseline(
+  speciesCn: string,
+  quarter: string,
+  records: RingRecord[],
+  morphs: Morphometrics[],
+  reviews: MeasureReview[],
+): MeasureBaselineSet {
+  const speciesByRing = new Map(records.map((record) => [record.id, record.speciesCn]));
+  const reviewByMorph = new Map(reviews.map((review) => [review.morphId, review]));
+  const rows: MeasureValueSet[] = [];
+  morphs.forEach((morph) => {
+    if (speciesByRing.get(morph.ringId) !== speciesCn) return;
+    if (quarterOf(morph.measuredAt) !== quarter) return;
+    rows.push(effectiveValuesOf(morph, reviewByMorph.get(morph.id)));
+  });
+  const set = {} as MeasureBaselineSet;
+  MEASURE_FIELDS.forEach((field) => {
+    set[field.key] = baselineOf(rows.map((values) => values[field.key]));
+  });
+  return set;
+}
+
+/**
+ * 单条量度与同鸟种均线、常见区间的偏离计算。
+ * 均线偏离（相对均值的百分比）与统计值（距离均值多少个标准差）两个都算。
+ */
 export function deviationsOf(
   values: Record<MeasureKey, number>,
   speciesCn: string,
-  means?: Record<MeasureKey, number>,
+  baseline?: MeasureBaselineSet,
+  approved = false,
 ): MeasureDeviation[] {
   const ranges = SPECIES_MEASURE_RANGES[speciesCn] ?? {};
   return MEASURE_FIELDS.map((field) => {
     const value = Number(values[field.key]) || 0;
-    const mean = means?.[field.key] ?? 0;
+    const mean = baseline?.[field.key]?.mean ?? 0;
+    const std = baseline?.[field.key]?.std ?? 0;
     const deviationPct = mean > 0 ? Number((((value - mean) / mean) * 100).toFixed(1)) : 0;
+    // 统计偏离：z 值；标准差为 0（样本不足）时不计算
+    const zScore = std > 0 ? Number(((value - mean) / std).toFixed(2)) : 0;
     const range = ranges[field.key];
     let level: MeasureDeviation['level'] = '正常';
-    let message = mean > 0 ? `与同鸟种均值 ${mean}${field.unit} 偏差 ${deviationPct}%` : '暂无同鸟种历史均值可比对';
+    const source = approved ? '本季核定均线' : '试算均线';
+    let message =
+      mean > 0
+        ? `与${source} ${mean}${field.unit} 偏离 ${deviationPct > 0 ? '+' : ''}${deviationPct}%，统计偏离 ${std > 0 ? `${zScore > 0 ? '+' : ''}${zScore}σ` : '样本不足'}`
+        : '暂无同鸟种本季均线可比对';
 
     if (value < field.min || value > field.max) {
       level = '超出常见区间';
@@ -132,11 +226,14 @@ export function deviationsOf(
     } else if (range && (value < range[0] || value > range[1])) {
       level = '超出常见区间';
       message = `${field.label} ${value}${field.unit} 超出「${speciesCn}」常见区间 ${range[0]}~${range[1]}${field.unit}`;
+    } else if (mean > 0 && std > 0 && Math.abs(zScore) >= 2) {
+      level = '偏离';
+      message = `${field.label} 与${source} ${mean}${field.unit} 统计偏离 ${zScore > 0 ? '+' : ''}${zScore}σ（均线偏离 ${deviationPct > 0 ? '+' : ''}${deviationPct}%）`;
     } else if (mean > 0 && Math.abs(deviationPct) > 15) {
       level = '偏离';
-      message = `${field.label} 与同鸟种均值 ${mean}${field.unit} 偏差 ${deviationPct}%（超过 15%）`;
+      message = `${field.label} 与${source} ${mean}${field.unit} 均线偏离 ${deviationPct > 0 ? '+' : ''}${deviationPct}%（统计偏离 ${std > 0 ? `${zScore > 0 ? '+' : ''}${zScore}σ` : '样本不足'}）`;
     }
-    return { key: field.key, label: field.label, value, mean, deviationPct, level, message };
+    return { key: field.key, label: field.label, value, mean, std, deviationPct, zScore, approved, level, message };
   });
 }
 

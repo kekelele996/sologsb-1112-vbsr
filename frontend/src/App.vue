@@ -7,6 +7,7 @@ import { seedIfEmpty } from './utils/seed';
 import { downloadText, exportBackupJson } from './utils/export';
 import { useRingStore } from './stores/ringStore';
 import { useMeasureStore } from './stores/measureStore';
+import { useReviewStore } from './stores/reviewStore';
 import { useSiteStore } from './stores/siteStore';
 import { useSessionStore } from './stores/sessionStore';
 import { useAmap } from './hooks/useAmap';
@@ -14,6 +15,7 @@ import { useAmap } from './hooks/useAmap';
 const route = useRoute();
 const ringStore = useRingStore();
 const measureStore = useMeasureStore();
+const reviewStore = useReviewStore();
 const siteStore = useSiteStore();
 const sessionStore = useSessionStore();
 const amap = useAmap();
@@ -28,7 +30,7 @@ onMounted(async () => {
   }
   try {
     await seedIfEmpty();
-    await Promise.all([ringStore.hydrate(), measureStore.hydrate(), siteStore.hydrate(), sessionStore.hydrate()]);
+    await Promise.all([ringStore.hydrate(), measureStore.hydrate(), reviewStore.hydrate(), siteStore.hydrate(), sessionStore.hydrate()]);
   } catch (error) {
     ElMessage.error(`本地数据装载失败：${(error as Error).message}`);
   } finally {
@@ -53,7 +55,8 @@ async function handleExport() {
       <el-menu :default-active="route.path" router class="app-menu" background-color="#1f5b52" text-color="#e8f3ef" active-text-color="#ffd591">
         <el-menu-item index="/">统计台</el-menu-item>
         <el-menu-item index="/rings">环志记录</el-menu-item>
-        <el-menu-item index="/measure">量度测量</el-menu-item>
+        <el-menu-item index="/measure">现场量度（环志组）</el-menu-item>
+        <el-menu-item index="/review">资料室复核</el-menu-item>
         <el-menu-item index="/sites">鸟点台账</el-menu-item>
         <el-menu-item index="/sessions">调查批次</el-menu-item>
       </el-menu>

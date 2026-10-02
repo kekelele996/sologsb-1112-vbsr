@@ -22,7 +22,11 @@ interface MeasureState {
   hydrated: boolean;
 }
 
-/** 量度记录与均值偏离（偏离值在页面用 utils/stats.ts 计算，保证响应式安全） */
+/**
+ * 环志组侧：现场量度记录。
+ * 原始数值只允许新增 / 删除，不提供「改数」动作 —— 资料室复核不能改现场数值，
+ * 确需更正时由资料室在复核侧另存修正值（见 reviewStore）。
+ */
 export const useMeasureStore = defineStore('measure', {
   state: (): MeasureState => ({ morphs: [], hydrated: false }),
 
@@ -46,6 +50,7 @@ export const useMeasureStore = defineStore('measure', {
       this.hydrated = true;
     },
 
+    /** 录入现场原始数值；同一条环志记录只允许一份现场量度 */
     async addMorph(input: MorphInput): Promise<Morphometrics> {
       const morph: Morphometrics = {
         id: uid('morph'),
@@ -60,21 +65,29 @@ export const useMeasureStore = defineStore('measure', {
         measuredBy: input.measuredBy.trim(),
         measuredAt: input.measuredAt ?? new Date().toISOString(),
       };
-      await db.morphs.put(toPlain(morph));
+      // 现场量度与资料室复核在同一事务内建账：morph 落库即产生一条「待复核」，保证两侧对得上。
+      await db.transaction('rw', db.morphs, db.reviews, async () => {
+        await db.morphs.put(toPlain(morph));
+        await db.reviews.put(
+          toPlain({
+            id: `review-${morph.id}`,
+            morphId: morph.id,
+            status: '待复核',
+            reviewedBy: '',
+            reviewedAt: '',
+          }),
+        );
+      });
       this.morphs = [morph, ...this.morphs];
       return morph;
     },
 
-    async updateMorph(id: string, patch: Partial<MorphInput>) {
-      const current = this.morphs.find((morph) => morph.id === id);
-      if (!current) return;
-      const next: Morphometrics = { ...current, ...patch };
-      await db.morphs.put(toPlain(next));
-      this.morphs = this.morphs.map((morph) => (morph.id === id ? next : morph));
-    },
-
+    /** 删除现场量度（同时撤掉其复核记录）；仅限环志组对自己这条现场记录操作 */
     async removeMorph(id: string) {
-      await db.morphs.delete(id);
+      await db.transaction('rw', db.morphs, db.reviews, async () => {
+        await db.reviews.where('morphId').equals(id).delete();
+        await db.morphs.delete(id);
+      });
       this.morphs = this.morphs.filter((morph) => morph.id !== id);
     },
   },
