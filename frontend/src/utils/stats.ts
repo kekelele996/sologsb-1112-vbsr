@@ -1,4 +1,11 @@
-import type { MeasureDeviation, MeasureKey, Morphometrics } from '../types/morphometrics';
+import {
+  fieldValuesOf,
+  isConcluded,
+  officialValuesOf,
+  type MeasureDeviation,
+  type MeasureKey,
+  type Morphometrics,
+} from '../types/morphometrics';
 import { MEASURE_FIELDS } from '../types/morphometrics';
 import type { RingRecord, RingStatus } from '../types/ring-record';
 import type { SessionStats, SurveySession } from '../types/session';
@@ -87,28 +94,53 @@ export function buildSessionStats(session: SurveySession, records: RingRecord[],
   };
 }
 
-/** 同鸟种历史均值（按量度字段） */
-export function measureMeans(records: RingRecord[], morphs: Morphometrics[]): Record<string, Record<MeasureKey, number>> {
+/**
+ * 同鸟种量度均值（按量度字段）。
+ * pick='field' 取现场原始数值（环志组录入值）；pick='official' 取定论采用值（有修正值取修正值）。
+ * onlyConcluded=true 时只统计已定论记录（资料室核定均线用）。
+ */
+export function meansOf(
+  records: RingRecord[],
+  morphs: Morphometrics[],
+  pick: 'field' | 'official' = 'field',
+  onlyConcluded = false,
+): Record<string, Record<MeasureKey, number>> {
   const speciesByRing = new Map(records.map((record) => [record.id, record.speciesCn]));
   const buckets = new Map<string, Morphometrics[]>();
   morphs.forEach((morph) => {
+    if (onlyConcluded && !isConcluded(morph)) return;
     const species = speciesByRing.get(morph.ringId);
     if (!species) return;
-    const list = buckets.get(species) ?? [];
+    let list = buckets.get(species);
+    if (!list) {
+      list = [];
+      buckets.set(species, list);
+    }
     list.push(morph);
-    buckets.set(species, list);
   });
 
   const result: Record<string, Record<MeasureKey, number>> = {};
   buckets.forEach((list, species) => {
     const means = {} as Record<MeasureKey, number>;
     MEASURE_FIELDS.forEach((field) => {
-      const values = list.map((morph) => Number(morph[field.key]) || 0).filter((value) => value > 0);
+      const values = list
+        .map((morph) => (pick === 'official' ? officialValuesOf(morph) : fieldValuesOf(morph))[field.key])
+        .filter((value) => value > 0);
       means[field.key] = values.length ? Number((values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(2)) : 0;
     });
     result[species] = means;
   });
   return result;
+}
+
+/** 同鸟种现场量度历史均值（全部记录的现场原始数值） */
+export function measureMeans(records: RingRecord[], morphs: Morphometrics[]): Record<string, Record<MeasureKey, number>> {
+  return meansOf(records, morphs, 'field');
+}
+
+/** 同鸟种定论采用值均值（已定论记录的修正值 / 原始值），供资料室按季核定均线参考 */
+export function suggestedMeans(records: RingRecord[], morphs: Morphometrics[]): Record<string, Record<MeasureKey, number>> {
+  return meansOf(records, morphs, 'official', true);
 }
 
 /** 单条量度与同鸟种均值、常见区间的偏离计算 */

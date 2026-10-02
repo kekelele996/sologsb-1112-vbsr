@@ -2,7 +2,8 @@ import { db } from './db';
 import type { BirdSite } from '../types/bird-site';
 import type { SurveySession } from '../types/session';
 import type { RingRecord } from '../types/ring-record';
-import type { Morphometrics } from '../types/morphometrics';
+import type { Morphometrics, ReviewInfo, ReviewStatus } from '../types/morphometrics';
+import type { SpeciesMean } from '../types/species-mean';
 import { SPECIES_CATALOG } from './stats';
 
 const DAY = 86_400_000;
@@ -92,6 +93,7 @@ function morph(
   fatScore: number,
   measuredBy: string,
   days: number,
+  review?: ReviewInfo,
 ): Morphometrics {
   return {
     id: `morph-${String(index).padStart(3, '0')}`,
@@ -105,24 +107,116 @@ function morph(
     fatScore,
     measuredBy,
     measuredAt: isoDaysAgo(days),
+    review: review ?? { status: 'pending' },
+  };
+}
+
+/** 构造复核信息（资料室侧） */
+function review(status: ReviewStatus, reviewer: string, days: number, extra: Partial<ReviewInfo> = {}): ReviewInfo {
+  return {
+    status,
+    reviewer,
+    reviewedAt: isoDaysAgo(days),
+    ...extra,
   };
 }
 
 export const SEED_MORPHS: Morphometrics[] = [
-  morph(1, 'ring-001', 14.2, 4.1, 74.5, 58.2, 23.4, 23.6, 2, '韩雪', 21),
+  morph(1, 'ring-001', 14.2, 4.1, 74.5, 58.2, 23.4, 23.6, 2, '韩雪', 21, review('confirmed', '郑海', 21)),
   morph(2, 'ring-002', 9.6, 3.2, 58.4, 38.6, 16.8, 7.4, 1, '韩雪', 21),
-  morph(3, 'ring-003', 10.1, 3.6, 58.2, 82.4, 22.1, 17.2, 3, '韩雪', 21),
-  morph(4, 'ring-004', 9.2, 3.3, 65.8, 57.4, 17.6, 14.2, 2, '郑海', 21),
-  morph(5, 'ring-005', 13.8, 4.0, 73.1, 57.0, 23.0, 22.8, 2, '韩雪', 21),
+  morph(
+    3,
+    'ring-003',
+    10.1,
+    3.6,
+    58.2,
+    82.4,
+    22.1,
+    17.2,
+    3,
+    '韩雪',
+    21,
+    review('doubtful', '郑海', 20, { doubtNote: '尾长 82.4mm 明显超出震旦鸦雀常见区间，待确认是否记录有误' }),
+  ),
+  morph(4, 'ring-004', 9.2, 3.3, 65.8, 57.4, 17.6, 14.2, 2, '郑海', 21, review('confirmed', '韩雪', 21)),
+  morph(
+    5,
+    'ring-005',
+    13.8,
+    4.0,
+    73.1,
+    57.0,
+    23.0,
+    22.8,
+    2,
+    '韩雪',
+    21,
+    review('confirmed', '郑海', 21, {
+      corrections: { weight: 23.4 },
+      note: '重捕个体体重复测 23.4g，现场 22.8g 照原样保留',
+    }),
+  ),
   morph(6, 'ring-006', 32.4, 4.8, 112.6, 50.2, 27.8, 55.4, 3, '韩雪', 14),
-  morph(7, 'ring-007', 128.5, 9.4, 278.0, 110.2, 78.6, 820.0, 2, '郑海', 14),
-  morph(8, 'ring-008', 30.1, 4.5, 105.8, 47.6, 26.4, 44.2, 1, '韩雪', 14),
-  morph(9, 'ring-009', 12.1, 3.9, 72.6, 54.2, 21.4, 14.6, 2, '郑海', 7),
-  morph(10, 'ring-010', 10.4, 3.5, 70.8, 58.6, 19.2, 15.1, 1, '郑海', 7),
+  morph(7, 'ring-007', 128.5, 9.4, 278.0, 110.2, 78.6, 820.0, 2, '郑海', 14, review('confirmed', '韩雪', 14)),
+  morph(
+    8,
+    'ring-008',
+    30.1,
+    4.5,
+    105.8,
+    47.6,
+    26.4,
+    44.2,
+    1,
+    '韩雪',
+    14,
+    review('doubtful', '韩雪', 13, { doubtNote: '喙长 30.1mm 偏短，幼鸟喙部量法待确认' }),
+  ),
+  morph(
+    9,
+    'ring-009',
+    12.1,
+    3.9,
+    72.6,
+    54.2,
+    21.4,
+    14.6,
+    2,
+    '郑海',
+    7,
+    review('remeasure', '郑海', 6, { remeasureRequest: '翅长量法待复测，确认是否为自然弦长' }),
+  ),
+  morph(10, 'ring-010', 10.4, 3.5, 70.8, 58.6, 19.2, 15.1, 1, '郑海', 7, review('confirmed', '韩雪', 7)),
   morph(11, 'ring-011', 9.4, 3.1, 57.2, 38.0, 16.4, 6.8, 1, '郑海', 7),
-  morph(12, 'ring-012', 9.0, 3.2, 62.4, 53.6, 17.2, 10.4, 2, '韩雪', 7),
+  morph(
+    12,
+    'ring-012',
+    9.0,
+    3.2,
+    62.4,
+    53.6,
+    17.2,
+    10.4,
+    2,
+    '韩雪',
+    7,
+    review('confirmed', '韩雪', 7, { corrections: { billLength: 9.6 }, note: '喙长复测 9.6mm，现场 9.0mm 保留' }),
+  ),
   morph(13, 'ring-015', 11.2, 3.8, 75.4, 65.2, 19.6, 21.4, 3, '郑海', 2),
-  morph(14, 'ring-016', 12.6, 3.9, 78.2, 62.4, 22.0, 16.8, 2, '郑海', 2),
+  morph(14, 'ring-016', 12.6, 3.9, 78.2, 62.4, 22.0, 16.8, 2, '郑海', 2, review('confirmed', '韩雪', 2)),
+];
+
+/** 示例季度均线（资料室按季核定）：2026-Q3 红喉歌鸲 */
+export const SEED_MEANS: SpeciesMean[] = [
+  {
+    id: 'mean-seed-001',
+    speciesCn: '红喉歌鸲',
+    quarter: '2026-Q3',
+    means: { billLength: 14.0, billWidth: 4.1, wingLength: 73.8, tailLength: 57.6, tarsusLength: 23.2, weight: 23.5 },
+    basedOn: 2,
+    approvedBy: '资料室',
+    approvedAt: isoDaysAgo(20),
+  },
 ];
 
 /** 首次打开（表内无数据）时写入示例数据；已有数据则不动 */
@@ -131,18 +225,20 @@ export async function seedIfEmpty(): Promise<void> {
   if (flag) {
     return;
   }
-  const [ringCount, morphCount, siteCount, sessionCount] = await Promise.all([
+  const [ringCount, morphCount, siteCount, sessionCount, meanCount] = await Promise.all([
     db.rings.count(),
     db.morphs.count(),
     db.sites.count(),
     db.sessions.count(),
+    db.speciesMeans.count(),
   ]);
 
-  await db.transaction('rw', db.rings, db.morphs, db.sites, db.sessions, db.meta, async () => {
+  await db.transaction('rw', [db.rings, db.morphs, db.sites, db.sessions, db.speciesMeans, db.meta], async () => {
     if (siteCount === 0) await db.sites.bulkPut(SEED_SITES);
     if (sessionCount === 0) await db.sessions.bulkPut(SEED_SESSIONS);
     if (ringCount === 0) await db.rings.bulkPut(SEED_RINGS);
     if (morphCount === 0) await db.morphs.bulkPut(SEED_MORPHS);
+    if (meanCount === 0) await db.speciesMeans.bulkPut(SEED_MEANS);
     await db.meta.put({ key: 'seeded', value: new Date().toISOString() });
   });
 }

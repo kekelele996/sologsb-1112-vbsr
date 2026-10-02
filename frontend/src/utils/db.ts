@@ -3,18 +3,20 @@ import type { RingRecord } from '../types/ring-record';
 import type { Morphometrics } from '../types/morphometrics';
 import type { BirdSite } from '../types/bird-site';
 import type { SurveySession } from '../types/session';
+import type { SpeciesMean } from '../types/species-mean';
 
 /** IndexedDB 库名（浏览器本地存储，无后端） */
 export const DB_NAME = 'gbbirdring-db';
 
 /** 当前 schema 版本，与 db.version(n) 对应 */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 class BirdRingDB extends Dexie {
   rings!: Table<RingRecord, string>;
   morphs!: Table<Morphometrics, string>;
   sites!: Table<BirdSite, string>;
   sessions!: Table<SurveySession, string>;
+  speciesMeans!: Table<SpeciesMean, string>;
   meta!: Table<{ key: string; value: string }, string>;
 
   constructor() {
@@ -46,6 +48,28 @@ class BirdRingDB extends Dexie {
           .modify((row: RingRecord) => {
             if (typeof row.colorRing !== 'string') {
               row.colorRing = '无';
+            }
+          });
+      });
+
+    // v3：量度按「现场原始数值 / 资料室复核结论」两边拆开，新增鸟种季度均线表。
+    // 旧数据升级：原来的量度算现场原始数值，复核侧补未复核结论，原值不动。
+    this.version(3)
+      .stores({
+        rings: 'id, ringNo, speciesCn, status, ringDate, siteId, sessionId, [speciesCn+ringDate]',
+        morphs: 'id, ringId, measuredAt, review.status',
+        sites: 'id, siteNo, habitat, name',
+        sessions: 'id, sessionNo, date, siteId, closed',
+        speciesMeans: 'id, speciesCn, quarter, [speciesCn+quarter]',
+        meta: 'key',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('morphs')
+          .toCollection()
+          .modify((row: Morphometrics) => {
+            if (!row.review) {
+              row.review = { status: 'pending' };
             }
           });
       });

@@ -9,6 +9,7 @@ import { useRingStore } from './stores/ringStore';
 import { useMeasureStore } from './stores/measureStore';
 import { useSiteStore } from './stores/siteStore';
 import { useSessionStore } from './stores/sessionStore';
+import { useMeanStore } from './stores/meanStore';
 import { useAmap } from './hooks/useAmap';
 
 const route = useRoute();
@@ -16,6 +17,7 @@ const ringStore = useRingStore();
 const measureStore = useMeasureStore();
 const siteStore = useSiteStore();
 const sessionStore = useSessionStore();
+const meanStore = useMeanStore();
 const amap = useAmap();
 const ready = ref(false);
 
@@ -28,7 +30,13 @@ onMounted(async () => {
   }
   try {
     await seedIfEmpty();
-    await Promise.all([ringStore.hydrate(), measureStore.hydrate(), siteStore.hydrate(), sessionStore.hydrate()]);
+    await Promise.all([
+      ringStore.hydrate(),
+      measureStore.hydrate(),
+      siteStore.hydrate(),
+      sessionStore.hydrate(),
+      meanStore.hydrate(),
+    ]);
   } catch (error) {
     ElMessage.error(`本地数据装载失败：${(error as Error).message}`);
   } finally {
@@ -54,6 +62,10 @@ async function handleExport() {
         <el-menu-item index="/">统计台</el-menu-item>
         <el-menu-item index="/rings">环志记录</el-menu-item>
         <el-menu-item index="/measure">量度测量</el-menu-item>
+        <el-menu-item index="/review">
+          量度复核
+          <el-badge v-if="measureStore.pendingCount" :value="measureStore.pendingCount" class="nav-badge" type="warning" />
+        </el-menu-item>
         <el-menu-item index="/sites">鸟点台账</el-menu-item>
         <el-menu-item index="/sessions">调查批次</el-menu-item>
       </el-menu>
@@ -97,6 +109,10 @@ async function handleExport() {
 }
 .app-menu {
   border-right: none;
+}
+.nav-badge {
+  margin-left: 8px;
+  margin-top: -2px;
 }
 .app-header {
   background: #fff;
